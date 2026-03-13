@@ -26,6 +26,8 @@ import { useKimiUsage } from "./kimi/fetcher";
 import { getKimiAccessory } from "./kimi/renderer";
 import { useZaiUsage } from "./zai/fetcher";
 import { getZaiAccessory } from "./zai/renderer";
+import { useSyntheticUsage } from "./synthetic/fetcher";
+import { getSyntheticAccessory } from "./synthetic/renderer";
 
 interface MenuBarAgent {
   id: AgentId;
@@ -58,6 +60,7 @@ export default function MenuBarCommand() {
   const isKimiVisible = Boolean(prefs.showKimi);
   const isAntigravityVisible = Boolean(prefs.showAntigravity);
   const isZaiVisible = Boolean(prefs.showZai);
+  const isSyntheticVisible = Boolean(prefs.showSynthetic);
 
   const ampState = useAmpUsage(isAmpVisible);
   const claudeState = useClaudeUsage(isClaudeVisible);
@@ -67,6 +70,7 @@ export default function MenuBarCommand() {
   const kimiState = useKimiUsage(isKimiVisible);
   const antigravityState = useAntigravityUsage(isAntigravityVisible);
   const zaiState = useZaiUsage(isZaiVisible);
+  const syntheticState = useSyntheticUsage(isSyntheticVisible);
 
   const allAgents: MenuBarAgent[] = [
     {
@@ -140,6 +144,15 @@ export default function MenuBarCommand() {
       isLoading: zaiState.isLoading,
       accessory: getZaiAccessory(zaiState.usage, zaiState.error, zaiState.isLoading),
       revalidate: zaiState.revalidate,
+    },
+    {
+      id: "synthetic",
+      name: "Synthetic",
+      icon: "synthetic-icon.png",
+      visible: isSyntheticVisible,
+      isLoading: syntheticState.isLoading,
+      accessory: getSyntheticAccessory(syntheticState.usage, syntheticState.error, syntheticState.isLoading),
+      revalidate: syntheticState.revalidate,
     },
   ];
 

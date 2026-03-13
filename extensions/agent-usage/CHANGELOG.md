@@ -1,5 +1,11 @@
 # Agent Usage Changelog
 
+## [Synthetic Provider and Kimi Fix] - {PR_MERGE_DATE}
+
+- Add Synthetic (synthetic.new) provider — monitor subscription quota, search hourly quota, and free tool calls with pie icon and renewal dates
+- Fix Kimi provider — broken since API moved from `POST /apiv2/.../GetUsages` to `GET https://api.kimi.com/coding/v1/usages`; updated response parser for new flat shape; reorganized UI with Rate Limit Details and Weekly Usage sections
+- Auto-detect credentials from OpenCode (`~/.local/share/opencode/auth.json`) for Kimi, Synthetic, and z.ai — Raycast preference remains as fallback
+
 ## [Add Claude Usage Provider] - 2026-03-09
 
 - Add Claude usage provider powered by Claude CLI OAuth credentials

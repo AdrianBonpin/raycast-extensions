@@ -1,6 +1,9 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import { getPreferenceValues } from "@raycast/api";
+import type { UsageState } from "../agents/types";
 import { ZaiUsage, ZaiError, ZaiLimitEntry, ZaiUsageDetail } from "./types";
 import { httpFetch } from "../agents/http";
-import { createTokenBasedHook } from "../agents/hooks";
+import { readOpencodeAuthToken } from "../agents/opencode-auth";
 
 const ZAI_USAGE_API = "https://api.z.ai/api/monitor/usage/quota/limit";
 
@@ -111,8 +114,69 @@ function parseZaiApiResponse(data: unknown): { usage: ZaiUsage | null; error: Za
   }
 }
 
-export const useZaiUsage = createTokenBasedHook<ZaiUsage, ZaiError>({
-  preferenceKey: "zaiApiToken",
-  agentName: "z.ai",
-  fetcher: fetchZaiUsage,
-});
+type AgentUsagePrefs = Preferences.AgentUsage;
+
+// --- Dual-source auth hook ---
+
+export function useZaiUsage(enabled = true): UsageState<ZaiUsage, ZaiError> {
+  const [usage, setUsage] = useState<ZaiUsage | null>(null);
+  const [error, setError] = useState<ZaiError | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasInitialFetch, setHasInitialFetch] = useState<boolean>(false);
+  const requestIdRef = useRef(0);
+
+  const fetchData = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+
+    const prefs = getPreferenceValues<AgentUsagePrefs>();
+
+    // Dual-source: opencode auth.json first, then Raycast preference
+    const token = readOpencodeAuthToken("zai-coding-plan") || (prefs.zaiApiToken as string | undefined)?.trim() || "";
+
+    if (!token) {
+      setUsage(null);
+      setError({
+        type: "not_configured",
+        message: "z.ai token not found. Login via OpenCode (zai-coding-plan) or add it in extension settings (Cmd+,).",
+      });
+      setIsLoading(false);
+      setHasInitialFetch(true);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    const result = await fetchZaiUsage(token);
+    if (requestId !== requestIdRef.current) return;
+
+    setUsage(result.usage);
+    setError(result.error);
+    setIsLoading(false);
+    setHasInitialFetch(true);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      requestIdRef.current += 1;
+      setUsage(null);
+      setError(null);
+      setIsLoading(false);
+      setHasInitialFetch(false);
+      return;
+    }
+    if (!hasInitialFetch) void fetchData();
+  }, [enabled, hasInitialFetch, fetchData]);
+
+  const revalidate = useCallback(async () => {
+    if (!enabled) return;
+    await fetchData();
+  }, [enabled, fetchData]);
+
+  return {
+    isLoading: enabled ? isLoading : false,
+    usage: enabled ? usage : null,
+    error: enabled ? error : null,
+    revalidate,
+  };
+}

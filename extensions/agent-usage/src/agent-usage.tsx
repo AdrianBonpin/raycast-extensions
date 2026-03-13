@@ -24,6 +24,9 @@ import type { GeminiError, GeminiUsage } from "./gemini/types";
 import { useKimiUsage } from "./kimi/fetcher";
 import { formatKimiUsageText, getKimiAccessory, renderKimiDetail } from "./kimi/renderer";
 import type { KimiError, KimiUsage } from "./kimi/types";
+import { useSyntheticUsage } from "./synthetic/fetcher";
+import { formatSyntheticUsageText, getSyntheticAccessory, renderSyntheticDetail } from "./synthetic/renderer";
+import type { SyntheticError, SyntheticUsage } from "./synthetic/types";
 import { useZaiUsage } from "./zai/fetcher";
 import { formatZaiUsageText, getZaiAccessory, renderZaiDetail } from "./zai/renderer";
 import type { ZaiError, ZaiUsage } from "./zai/types";
@@ -49,6 +52,7 @@ interface AgentUsageById {
   gemini: GeminiUsage;
   kimi: KimiUsage;
   antigravity: AntigravityUsage;
+  synthetic: SyntheticUsage;
   zai: ZaiUsage;
 }
 
@@ -60,6 +64,7 @@ interface AgentErrorById {
   gemini: GeminiError;
   kimi: KimiError;
   antigravity: AntigravityError;
+  synthetic: SyntheticError;
   zai: ZaiError;
 }
 
@@ -159,6 +164,18 @@ const AGENT_REGISTRY: AgentRegistry = {
     getAccessory: getAntigravityAccessory,
     formatUsageText: formatAntigravityUsageText,
   },
+  synthetic: {
+    id: "synthetic",
+    name: "Synthetic",
+    icon: "synthetic-icon.png",
+    description: "Synthetic AI Coding Assistant",
+    isSupported: true,
+    settingsUrl: "https://synthetic.new/billing",
+    useUsage: useSyntheticUsage,
+    renderDetail: renderSyntheticDetail,
+    getAccessory: getSyntheticAccessory,
+    formatUsageText: formatSyntheticUsageText,
+  },
   zai: {
     id: "zai",
     name: "z.ai",
@@ -223,6 +240,7 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
   const kimiState = AGENT_REGISTRY.kimi.useUsage(Boolean(prefs.showKimi));
   const antigravityState = AGENT_REGISTRY.antigravity.useUsage(Boolean(prefs.showAntigravity));
   const zaiState = AGENT_REGISTRY.zai.useUsage(Boolean(prefs.showZai));
+  const syntheticState = AGENT_REGISTRY.synthetic.useUsage(Boolean(prefs.showSynthetic));
 
   const agentViews: Record<AgentId, AgentView> = {
     amp: createAgentView(AGENT_REGISTRY.amp, ampState, Boolean(prefs.showAmp)),
@@ -232,6 +250,7 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
     gemini: createAgentView(AGENT_REGISTRY.gemini, geminiState, Boolean(prefs.showGemini)),
     kimi: createAgentView(AGENT_REGISTRY.kimi, kimiState, Boolean(prefs.showKimi)),
     antigravity: createAgentView(AGENT_REGISTRY.antigravity, antigravityState, Boolean(prefs.showAntigravity)),
+    synthetic: createAgentView(AGENT_REGISTRY.synthetic, syntheticState, Boolean(prefs.showSynthetic)),
     zai: createAgentView(AGENT_REGISTRY.zai, zaiState, Boolean(prefs.showZai)),
   };
 

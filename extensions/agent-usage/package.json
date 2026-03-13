@@ -2,9 +2,12 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "agent-usage",
   "title": "Agent Usage",
-  "description": "Monitor AI coding agent usage across Amp, Claude, Codex, Droid, Gemini, Kimi, Antigravity, and z.ai",
+  "description": "Monitor AI coding agent usage across Amp, Claude, Codex, Droid, Gemini, Kimi, Antigravity, Synthetic, and z.ai",
   "icon": "extension-icon.png",
   "author": "thuggyduck",
+  "contributors": [
+    "adrianbonpin"
+  ],
   "platforms": [
     "macOS"
   ],
@@ -79,6 +82,14 @@
       "required": false
     },
     {
+      "name": "showSynthetic",
+      "type": "checkbox",
+      "label": "Show Synthetic",
+      "description": "Show Synthetic usage in the list",
+      "default": true,
+      "required": false
+    },
+    {
       "name": "ampDisplayMode",
       "type": "dropdown",
       "title": "Amp Display Mode",
@@ -86,8 +97,14 @@
       "default": "amount",
       "required": false,
       "data": [
-        { "value": "amount", "title": "Amount" },
-        { "value": "percentage", "title": "Percentage" }
+        {
+          "value": "amount",
+          "title": "Amount"
+        },
+        {
+          "value": "percentage",
+          "title": "Percentage"
+        }
       ]
     },
     {
@@ -107,15 +124,22 @@
     {
       "name": "kimiAuthToken",
       "type": "password",
-      "title": "Kimi Authorization Token",
-      "description": "From browser DevTools: Authorization header when accessing https://www.kimi.com/code/console. Format: 'Bearer eyJ...' or just 'eyJ...'",
+      "title": "Kimi Authorization Token (Optional)",
+      "description": "Auto-detected from OpenCode login (kimi-for-coding). Fallback: paste the Authorization header value from https://www.kimi.com/code/console DevTools. Format: 'Bearer eyJ...' or just 'eyJ...'",
+      "required": false
+    },
+    {
+      "name": "syntheticApiToken",
+      "type": "password",
+      "title": "Synthetic API Token (Optional)",
+      "description": "Auto-detected from OpenCode login (synthetic). Fallback: paste your Synthetic API key from https://synthetic.new/billing.",
       "required": false
     },
     {
       "name": "zaiApiToken",
       "type": "password",
-      "title": "z.ai API Token",
-      "description": "API token from z.ai(GLM) platform. Set via extension preferences or Z_AI_API_KEY environment variable.",
+      "title": "z.ai API Token (Optional)",
+      "description": "Auto-detected from OpenCode login (zai-coding-plan). Fallback: paste your z.ai API key from https://z.ai.",
       "required": false
     }
   ],
