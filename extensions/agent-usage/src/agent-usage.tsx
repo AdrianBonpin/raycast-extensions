@@ -1,4 +1,14 @@
-import { Action, ActionPanel, getPreferenceValues, Icon, List, LocalStorage, showToast, Toast } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  getPreferenceValues,
+  Icon,
+  List,
+  LocalStorage,
+  showToast,
+  Toast,
+  useNavigation,
+} from "@raycast/api";
 import type { LaunchProps } from "@raycast/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Accessory, AgentDefinition, AgentId, UsageState } from "./agents/types";
@@ -11,7 +21,7 @@ import type { AntigravityError, AntigravityUsage } from "./antigravity/types";
 import { useClaudeUsage } from "./claude/fetcher";
 import { formatClaudeUsageText, getClaudeAccessory, renderClaudeDetail } from "./claude/renderer";
 import type { ClaudeError, ClaudeUsage } from "./claude/types";
-import { useCodexUsage } from "./codex/fetcher";
+import { useCodexUsage, useCodexAccounts } from "./codex/fetcher";
 import { formatCodexUsageText, getCodexAccessory, renderCodexDetail } from "./codex/renderer";
 import type { CodexError, CodexUsage } from "./codex/types";
 import { useDroidUsage } from "./droid/fetcher";
@@ -24,12 +34,15 @@ import type { GeminiError, GeminiUsage } from "./gemini/types";
 import { useKimiUsage } from "./kimi/fetcher";
 import { formatKimiUsageText, getKimiAccessory, renderKimiDetail } from "./kimi/renderer";
 import type { KimiError, KimiUsage } from "./kimi/types";
-import { useSyntheticUsage } from "./synthetic/fetcher";
+import { useSyntheticUsage, useSyntheticAccounts } from "./synthetic/fetcher";
 import { formatSyntheticUsageText, getSyntheticAccessory, renderSyntheticDetail } from "./synthetic/renderer";
 import type { SyntheticError, SyntheticUsage } from "./synthetic/types";
-import { useZaiUsage } from "./zai/fetcher";
+import { useZaiUsage, useZaiAccounts } from "./zai/fetcher";
 import { formatZaiUsageText, getZaiAccessory, renderZaiDetail } from "./zai/renderer";
 import type { ZaiError, ZaiUsage } from "./zai/types";
+import { useKimiAccounts } from "./kimi/fetcher";
+import { ManageAccountsForm } from "./accounts/ManageAccountsForm";
+import type { AccountUsageState } from "./accounts/types";
 
 const AGENT_ORDER_KEY = "agent-order";
 
@@ -51,8 +64,8 @@ interface AgentUsageById {
   droid: DroidUsage;
   gemini: GeminiUsage;
   kimi: KimiUsage;
-  antigravity: AntigravityUsage;
   synthetic: SyntheticUsage;
+  antigravity: AntigravityUsage;
   zai: ZaiUsage;
 }
 
@@ -63,8 +76,8 @@ interface AgentErrorById {
   droid: DroidError;
   gemini: GeminiError;
   kimi: KimiError;
-  antigravity: AntigravityError;
   synthetic: SyntheticError;
+  antigravity: AntigravityError;
   zai: ZaiError;
 }
 
@@ -79,6 +92,33 @@ interface AgentView extends AgentDefinition {
   getAccessory: () => Accessory;
   renderDetail: () => React.ReactNode;
   formatUsageText: () => string;
+}
+
+/** A list row for one named account of a multi-account provider. */
+interface AccountedAgentView {
+  /** Unique key for this row — e.g. "kimi-abc123" */
+  rowId: string;
+  /** Provider id — used to look up icon/settingsUrl */
+  agentId: AgentId;
+  /** Display name — e.g. "Kimi • Work" */
+  title: string;
+  /** Provider icon */
+  icon: string;
+  settingsUrl?: string;
+  isVisible: boolean;
+  isLoading: boolean;
+  revalidate: () => Promise<void>;
+  getAccessory: () => Accessory;
+  renderDetail: () => React.ReactNode;
+  formatUsageText: () => string;
+  /** The account id, for use in the manage-accounts form */
+  accountId: string;
+  /** The provider key, for use in the manage-accounts form */
+  provider: "kimi" | "zai" | "codex" | "synthetic";
+  /** Whether this provider is supported (always true for accounted views) */
+  isSupported: boolean;
+  /** The API token for this account (for copying) */
+  token: string;
 }
 
 const AGENT_REGISTRY: AgentRegistry = {
@@ -141,6 +181,17 @@ const AGENT_REGISTRY: AgentRegistry = {
     getAccessory: getGeminiAccessory,
     formatUsageText: formatGeminiUsageText,
   },
+  antigravity: {
+    id: "antigravity",
+    name: "Antigravity",
+    icon: "antigravity-icon.png",
+    description: "Google Antigravity",
+    isSupported: true,
+    useUsage: useAntigravityUsage,
+    renderDetail: renderAntigravityDetail,
+    getAccessory: getAntigravityAccessory,
+    formatUsageText: formatAntigravityUsageText,
+  },
   kimi: {
     id: "kimi",
     name: "Kimi",
@@ -153,22 +204,11 @@ const AGENT_REGISTRY: AgentRegistry = {
     getAccessory: getKimiAccessory,
     formatUsageText: formatKimiUsageText,
   },
-  antigravity: {
-    id: "antigravity",
-    name: "Antigravity",
-    icon: "antigravity-icon.png",
-    description: "Google Antigravity",
-    isSupported: true,
-    useUsage: useAntigravityUsage,
-    renderDetail: renderAntigravityDetail,
-    getAccessory: getAntigravityAccessory,
-    formatUsageText: formatAntigravityUsageText,
-  },
   synthetic: {
     id: "synthetic",
     name: "Synthetic",
     icon: "synthetic-icon.png",
-    description: "Synthetic AI Coding Assistant",
+    description: "Synthetic AI",
     isSupported: true,
     settingsUrl: "https://synthetic.new/billing",
     useUsage: useSyntheticUsage,
@@ -217,6 +257,37 @@ function createAgentView<TUsage, TError extends ErrorLike>(
   };
 }
 
+function createAccountedViews<TUsage, TError extends { type: string; message: string }>(
+  agentId: AgentId,
+  providerName: string,
+  icon: string,
+  settingsUrl: string | undefined,
+  provider: "kimi" | "zai" | "codex" | "synthetic",
+  isVisible: boolean,
+  accountStates: AccountUsageState<TUsage, TError>[],
+  renderDetail: (usage: TUsage | null, error: TError | null) => React.ReactNode,
+  getAccessory: (usage: TUsage | null, error: TError | null, isLoading: boolean) => Accessory,
+  formatUsageText: (usage: TUsage | null, error: TError | null) => string,
+): AccountedAgentView[] {
+  return accountStates.map((state) => ({
+    rowId: `${agentId}-${state.accountId}`,
+    agentId,
+    title: state.label === "Default" ? providerName : `${providerName} • ${state.label}`,
+    icon,
+    settingsUrl,
+    isVisible,
+    isLoading: state.isLoading,
+    revalidate: state.revalidate,
+    getAccessory: () => getAccessory(state.usage, state.error, state.isLoading),
+    renderDetail: () => renderDetail(state.usage, state.error),
+    formatUsageText: () => formatUsageText(state.usage, state.error),
+    accountId: state.accountId,
+    provider,
+    isSupported: true,
+    token: state.token,
+  }));
+}
+
 function renderUnsupportedDetail(agent: AgentDefinition): React.ReactNode {
   return (
     <List.Item.Detail.Metadata>
@@ -230,51 +301,99 @@ function renderUnsupportedDetail(agent: AgentDefinition): React.ReactNode {
 
 export default function Command(props: LaunchProps<{ launchContext: CommandLaunchContext }>) {
   const prefs = getPreferenceValues<Preferences>();
+  const { push } = useNavigation();
 
   // Hooks must be called unconditionally at top level (React rules)
   const ampState = AGENT_REGISTRY.amp.useUsage(Boolean(prefs.showAmp));
   const claudeState = AGENT_REGISTRY.claude.useUsage(Boolean(prefs.showClaude));
-  const codexState = AGENT_REGISTRY.codex.useUsage(Boolean(prefs.showCodex));
   const droidState = AGENT_REGISTRY.droid.useUsage(Boolean(prefs.showDroid));
   const geminiState = AGENT_REGISTRY.gemini.useUsage(Boolean(prefs.showGemini));
-  const kimiState = AGENT_REGISTRY.kimi.useUsage(Boolean(prefs.showKimi));
   const antigravityState = AGENT_REGISTRY.antigravity.useUsage(Boolean(prefs.showAntigravity));
-  const zaiState = AGENT_REGISTRY.zai.useUsage(Boolean(prefs.showZai));
-  const syntheticState = AGENT_REGISTRY.synthetic.useUsage(Boolean(prefs.showSynthetic));
 
-  const agentViews: Record<AgentId, AgentView> = {
+  // Multi-account providers
+  const codexAccountStates = useCodexAccounts(Boolean(prefs.showCodex));
+  const kimiAccountStates = useKimiAccounts(Boolean(prefs.showKimi));
+  const syntheticAccountStates = useSyntheticAccounts(Boolean(prefs.showSynthetic));
+  const zaiAccountStates = useZaiAccounts(Boolean(prefs.showZai));
+
+  const agentViews: Omit<Record<AgentId, AgentView>, "codex" | "kimi" | "synthetic" | "zai"> = {
     amp: createAgentView(AGENT_REGISTRY.amp, ampState, Boolean(prefs.showAmp)),
     claude: createAgentView(AGENT_REGISTRY.claude, claudeState, Boolean(prefs.showClaude)),
-    codex: createAgentView(AGENT_REGISTRY.codex, codexState, Boolean(prefs.showCodex)),
     droid: createAgentView(AGENT_REGISTRY.droid, droidState, Boolean(prefs.showDroid)),
     gemini: createAgentView(AGENT_REGISTRY.gemini, geminiState, Boolean(prefs.showGemini)),
-    kimi: createAgentView(AGENT_REGISTRY.kimi, kimiState, Boolean(prefs.showKimi)),
     antigravity: createAgentView(AGENT_REGISTRY.antigravity, antigravityState, Boolean(prefs.showAntigravity)),
-    synthetic: createAgentView(AGENT_REGISTRY.synthetic, syntheticState, Boolean(prefs.showSynthetic)),
-    zai: createAgentView(AGENT_REGISTRY.zai, zaiState, Boolean(prefs.showZai)),
   };
 
+  const kimiAccountedViews = createAccountedViews(
+    "kimi",
+    "Kimi",
+    AGENT_REGISTRY.kimi.icon,
+    AGENT_REGISTRY.kimi.settingsUrl,
+    "kimi",
+    Boolean(prefs.showKimi),
+    kimiAccountStates,
+    renderKimiDetail,
+    getKimiAccessory,
+    formatKimiUsageText,
+  );
+
+  const zaiAccountedViews = createAccountedViews(
+    "zai",
+    "z.ai",
+    AGENT_REGISTRY.zai.icon,
+    AGENT_REGISTRY.zai.settingsUrl,
+    "zai",
+    Boolean(prefs.showZai),
+    zaiAccountStates,
+    renderZaiDetail,
+    getZaiAccessory,
+    formatZaiUsageText,
+  );
+
+  const codexAccountedViews = createAccountedViews(
+    "codex",
+    "Codex",
+    AGENT_REGISTRY.codex.icon,
+    AGENT_REGISTRY.codex.settingsUrl,
+    "codex",
+    Boolean(prefs.showCodex),
+    codexAccountStates,
+    renderCodexDetail,
+    getCodexAccessory,
+    formatCodexUsageText,
+  );
+
+  const syntheticAccountedViews = createAccountedViews(
+    "synthetic",
+    "Synthetic",
+    AGENT_REGISTRY.synthetic.icon,
+    AGENT_REGISTRY.synthetic.settingsUrl,
+    "synthetic",
+    Boolean(prefs.showSynthetic),
+    syntheticAccountStates,
+    renderSyntheticDetail,
+    getSyntheticAccessory,
+    formatSyntheticUsageText,
+  );
+
   const [agentOrder, setAgentOrder] = useState<AgentId[]>(AGENT_IDS);
+  const [orderLoaded, setOrderLoaded] = useState(false);
 
   useEffect(() => {
     LocalStorage.getItem<string>(AGENT_ORDER_KEY).then((stored) => {
-      if (!stored) {
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stored);
-        if (!Array.isArray(parsed)) {
-          setAgentOrder(AGENT_IDS);
-          return;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            const validOrder = parsed.filter((id): id is AgentId => typeof id === "string" && isAgentId(id));
+            const missingIds = AGENT_IDS.filter((id) => !validOrder.includes(id));
+            setAgentOrder([...validOrder, ...missingIds]);
+          }
+        } catch {
+          // keep default order
         }
-
-        const validOrder = parsed.filter((id): id is AgentId => typeof id === "string" && isAgentId(id));
-        const missingIds = AGENT_IDS.filter((id) => !validOrder.includes(id));
-        setAgentOrder([...validOrder, ...missingIds]);
-      } catch {
-        setAgentOrder(AGENT_IDS);
       }
+      setOrderLoaded(true);
     });
   }, []);
 
@@ -283,8 +402,30 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
     await LocalStorage.setItem(AGENT_ORDER_KEY, JSON.stringify(newOrder));
   }, []);
 
-  const orderedAgentViews = agentOrder.map((agentId) => agentViews[agentId]);
-  const visibleAgentViews = orderedAgentViews.filter((agent) => agent.isVisible);
+  // Build a flat list of renderable items — each is either a standard AgentView or an AccountedAgentView
+  type ListRow = { kind: "agent"; view: AgentView } | { kind: "accounted"; view: AccountedAgentView };
+
+  const allRows: ListRow[] = agentOrder.flatMap((agentId): ListRow[] => {
+    if (agentId === "codex") {
+      return codexAccountedViews.filter((v) => v.isVisible).map((view) => ({ kind: "accounted", view }));
+    }
+    if (agentId === "kimi") {
+      return kimiAccountedViews.filter((v) => v.isVisible).map((view) => ({ kind: "accounted", view }));
+    }
+    if (agentId === "synthetic") {
+      return syntheticAccountedViews.filter((v) => v.isVisible).map((view) => ({ kind: "accounted", view }));
+    }
+    if (agentId === "zai") {
+      return zaiAccountedViews.filter((v) => v.isVisible).map((view) => ({ kind: "accounted", view }));
+    }
+    if (agentId in agentViews) {
+      const view = agentViews[agentId as keyof typeof agentViews];
+      if (!view.isVisible) return [];
+      return [{ kind: "agent", view }];
+    }
+    return [];
+  });
+
   const requestedSelectedAgentId = props.launchContext?.selectedAgentId;
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(() =>
     typeof requestedSelectedAgentId === "string" && isAgentId(requestedSelectedAgentId)
@@ -293,21 +434,19 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
   );
 
   useEffect(() => {
-    if (visibleAgentViews.length === 0) {
+    if (allRows.length === 0) {
       if (selectedItemId !== undefined) {
         setSelectedItemId(undefined);
       }
       return;
     }
 
-    if (selectedItemId && visibleAgentViews.some((agent) => agent.id === selectedItemId)) {
-      return;
-    }
+    const allIds = allRows.map((r) => (r.kind === "agent" ? r.view.id : r.view.rowId));
+    if (selectedItemId && allIds.includes(selectedItemId)) return;
+    setSelectedItemId(allIds[0]);
+  }, [selectedItemId, allRows]);
 
-    setSelectedItemId(visibleAgentViews[0].id);
-  }, [selectedItemId, visibleAgentViews]);
-
-  const isLoading = visibleAgentViews.some((agent) => agent.isLoading);
+  const isLoading = allRows.some((row) => (row.kind === "agent" ? row.view.isLoading : row.view.isLoading));
 
   const hasPromptedGeminiReauth = useRef(false);
 
@@ -357,7 +496,7 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
   }, [prefs.showGemini, geminiState.error?.type, handleGeminiReauth]);
 
   const handleRefresh = async () => {
-    await Promise.all(visibleAgentViews.map((agent) => agent.revalidate()));
+    await Promise.all(allRows.map((row) => (row.kind === "agent" ? row.view.revalidate() : row.view.revalidate())));
     await showToast({
       title: "Refreshed",
       style: Toast.Style.Success,
@@ -381,68 +520,159 @@ export default function Command(props: LaunchProps<{ launchContext: CommandLaunc
 
   return (
     <List
-      isLoading={isLoading}
+      isLoading={!orderLoaded || isLoading}
       isShowingDetail
       selectedItemId={selectedItemId}
       onSelectionChange={(id) => setSelectedItemId(id ?? undefined)}
     >
-      {visibleAgentViews.map((agent, index) => {
-        const accessory = agent.getAccessory();
-        const detail = agent.isSupported ? agent.renderDetail() : renderUnsupportedDetail(agent);
+      {orderLoaded &&
+        allRows.map((row, index) => {
+          if (row.kind === "agent") {
+            const agent = row.view;
+            const accessory = agent.getAccessory();
+            const detail = agent.isSupported ? agent.renderDetail() : renderUnsupportedDetail(agent);
+            const canMoveUp = index > 0;
+            const canMoveDown = index < allRows.length - 1;
 
-        const canMoveUp = index > 0;
-        const canMoveDown = index < visibleAgentViews.length - 1;
+            return (
+              <List.Item
+                key={agent.id}
+                id={agent.id}
+                icon={agent.icon}
+                title={agent.name}
+                subtitle={agent.isSupported ? undefined : "(Coming Soon)"}
+                accessories={[{ icon: accessory.icon, text: accessory.text, tooltip: accessory.tooltip }]}
+                detail={<List.Item.Detail metadata={detail} />}
+                actions={
+                  <ActionPanel>
+                    {agent.isSupported && (
+                      <>
+                        <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={handleRefresh} />
+                        <Action.CopyToClipboard
+                          title="Copy Usage Details"
+                          content={agent.formatUsageText()}
+                          shortcut={{ modifiers: ["cmd"], key: "c" }}
+                        />
+                        {agent.id === "gemini" && geminiState.error?.type === "unauthorized" && (
+                          <Action title="Run Gemini Re-Authentication" icon={Icon.Key} onAction={handleGeminiReauth} />
+                        )}
+                        {agent.settingsUrl && (
+                          <Action.OpenInBrowser title={`Open ${agent.name} Settings`} url={agent.settingsUrl} />
+                        )}
+                      </>
+                    )}
+                    <ActionPanel.Section title="Reorder">
+                      {canMoveUp && (
+                        <Action
+                          title="Move Up" // eslint-disable-line @raycast/prefer-title-case
+                          icon={Icon.ArrowUp}
+                          shortcut={{ modifiers: ["cmd", "opt"], key: "arrowUp" }}
+                          onAction={() => moveAgent(agent.id, "up")}
+                        />
+                      )}
+                      {canMoveDown && (
+                        <Action
+                          title="Move Down"
+                          icon={Icon.ArrowDown}
+                          shortcut={{ modifiers: ["cmd", "opt"], key: "arrowDown" }}
+                          onAction={() => moveAgent(agent.id, "down")}
+                        />
+                      )}
+                    </ActionPanel.Section>
+                  </ActionPanel>
+                }
+              />
+            );
+          } else {
+            const view = row.view;
+            const accessory = view.getAccessory();
+            const detail = view.renderDetail();
+            const canMoveUp = index > 0;
+            const canMoveDown = index < allRows.length - 1;
 
-        return (
-          <List.Item
-            key={agent.id}
-            id={agent.id}
-            icon={agent.icon}
-            title={agent.name}
-            subtitle={agent.isSupported ? undefined : "(Coming Soon)"}
-            accessories={[{ icon: accessory.icon, text: accessory.text, tooltip: accessory.tooltip }]}
-            detail={<List.Item.Detail metadata={detail} />}
-            actions={
-              <ActionPanel>
-                {agent.isSupported && (
-                  <>
+            return (
+              <List.Item
+                key={view.rowId}
+                id={view.rowId}
+                icon={view.icon}
+                title={view.title}
+                accessories={[{ icon: accessory.icon, text: accessory.text, tooltip: accessory.tooltip }]}
+                detail={<List.Item.Detail metadata={detail} />}
+                actions={
+                  <ActionPanel>
                     <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={handleRefresh} />
                     <Action.CopyToClipboard
                       title="Copy Usage Details"
-                      content={agent.formatUsageText()}
+                      content={view.formatUsageText()}
                       shortcut={{ modifiers: ["cmd"], key: "c" }}
                     />
-                    {agent.id === "gemini" && geminiState.error?.type === "unauthorized" && (
-                      <Action title="Run Gemini Re-Authentication" icon={Icon.Key} onAction={handleGeminiReauth} />
+                    {view.token && (
+                      <Action.CopyToClipboard
+                        title="Copy API Key"
+                        content={view.token}
+                        shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+                      />
                     )}
-                    {agent.settingsUrl && (
-                      <Action.OpenInBrowser title={`Open ${agent.name} Settings`} url={agent.settingsUrl} />
+                    <Action
+                      title="Manage Accounts"
+                      icon={Icon.Person}
+                      shortcut={{ modifiers: ["cmd"], key: "m" }}
+                      onAction={() =>
+                        push(
+                          <ManageAccountsForm
+                            provider={view.provider}
+                            providerName={
+                              view.agentId === "kimi"
+                                ? "Kimi"
+                                : view.agentId === "zai"
+                                  ? "z.ai"
+                                  : view.agentId === "codex"
+                                    ? "Codex"
+                                    : "Synthetic"
+                            }
+                            onSave={handleRefresh}
+                          />,
+                        )
+                      }
+                    />
+                    {view.settingsUrl && (
+                      <Action.OpenInBrowser
+                        title={`Open ${
+                          view.agentId === "kimi"
+                            ? "Kimi"
+                            : view.agentId === "zai"
+                              ? "z.ai"
+                              : view.agentId === "codex"
+                                ? "Codex"
+                                : "Synthetic"
+                        } Settings`}
+                        url={view.settingsUrl}
+                      />
                     )}
-                  </>
-                )}
-                <ActionPanel.Section title="Reorder">
-                  {canMoveUp && (
-                    <Action
-                      title="Move up"
-                      icon={Icon.ArrowUp}
-                      shortcut={{ modifiers: ["cmd", "opt"], key: "arrowUp" }}
-                      onAction={() => moveAgent(agent.id, "up")}
-                    />
-                  )}
-                  {canMoveDown && (
-                    <Action
-                      title="Move Down"
-                      icon={Icon.ArrowDown}
-                      shortcut={{ modifiers: ["cmd", "opt"], key: "arrowDown" }}
-                      onAction={() => moveAgent(agent.id, "down")}
-                    />
-                  )}
-                </ActionPanel.Section>
-              </ActionPanel>
-            }
-          />
-        );
-      })}
+                    <ActionPanel.Section title="Reorder">
+                      {canMoveUp && (
+                        <Action
+                          title="Move Up" // eslint-disable-line @raycast/prefer-title-case
+                          icon={Icon.ArrowUp}
+                          shortcut={{ modifiers: ["cmd", "opt"], key: "arrowUp" }}
+                          onAction={() => moveAgent(view.agentId, "up")}
+                        />
+                      )}
+                      {canMoveDown && (
+                        <Action
+                          title="Move Down"
+                          icon={Icon.ArrowDown}
+                          shortcut={{ modifiers: ["cmd", "opt"], key: "arrowDown" }}
+                          onAction={() => moveAgent(view.agentId, "down")}
+                        />
+                      )}
+                    </ActionPanel.Section>
+                  </ActionPanel>
+                }
+              />
+            );
+          }
+        })}
     </List>
   );
 }

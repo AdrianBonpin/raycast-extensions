@@ -8,6 +8,7 @@ import {
   getLoadingAccessory,
   getNoDataAccessory,
   generatePieIcon,
+  generateAsciiBar,
 } from "../agents/ui";
 
 function getRemainingPercent(used: number, limit: number): number {
@@ -24,7 +25,8 @@ function formatQuotaText(used: number, limit: number): string {
 
 function formatQuotaSection(bucket: SyntheticQuotaBucket, name: string): string {
   const pct = getRemainingPercent(bucket.requests, bucket.limit);
-  return `${name}: ${bucket.requests}/${bucket.limit} (${pct}%) - Renews: ${formatResetTime(bucket.renewsAt)}`;
+  const remaining = bucket.limit - bucket.requests;
+  return `${name}: ${remaining}/${bucket.limit} (${pct}%) - Renews: ${formatResetTime(bucket.renewsAt)}`;
 }
 
 export function formatSyntheticUsageText(usage: SyntheticUsage | null, error: SyntheticError | null): string {
@@ -32,13 +34,16 @@ export function formatSyntheticUsageText(usage: SyntheticUsage | null, error: Sy
   if (fallback !== null) return fallback;
   const u = usage as SyntheticUsage;
 
+  const subPct = getRemainingPercent(u.subscription.requests, u.subscription.limit);
   let text = `Synthetic Usage`;
   text += `\n\nSubscription`;
-  text += `\n${formatQuotaSection(u.subscription, "Used")}`;
+  text += `\n${generateAsciiBar(subPct)} ${formatQuotaSection(u.subscription, "Remaining")}`;
   text += `\n\nFree Tool Calls`;
-  text += `\n${formatQuotaSection(u.freeToolCalls, "Used")}`;
+  const toolPct = getRemainingPercent(u.freeToolCalls.requests, u.freeToolCalls.limit);
+  text += `\n${generateAsciiBar(toolPct)} ${formatQuotaSection(u.freeToolCalls, "Remaining")}`;
   text += `\n\nSearch (Hourly)`;
-  text += `\n${formatQuotaSection(u.search.hourly, "Used")}`;
+  const searchPct = getRemainingPercent(u.search.hourly.requests, u.search.hourly.limit);
+  text += `\n${generateAsciiBar(searchPct)} ${formatQuotaSection(u.search.hourly, "Remaining")}`;
   return text;
 }
 
@@ -47,36 +52,34 @@ export function renderSyntheticDetail(usage: SyntheticUsage | null, error: Synth
   if (fallback !== null) return fallback;
   const u = usage as SyntheticUsage;
 
+  const subPct = getRemainingPercent(u.subscription.requests, u.subscription.limit);
+  const toolPct = getRemainingPercent(u.freeToolCalls.requests, u.freeToolCalls.limit);
+  const searchPct = getRemainingPercent(u.search.hourly.requests, u.search.hourly.limit);
+
   return (
     <List.Item.Detail.Metadata>
       {/* Subscription Section */}
-      <List.Item.Detail.Metadata.Label title="Subscription" text="" />
-      <List.Item.Detail.Metadata.Label title="Used" text={`${u.subscription.requests} / ${u.subscription.limit}`} />
       <List.Item.Detail.Metadata.Label
-        title="Remaining"
-        text={formatQuotaText(u.subscription.requests, u.subscription.limit)}
+        title="Subscription"
+        text={`${generateAsciiBar(subPct)} ${formatQuotaText(u.subscription.requests, u.subscription.limit)}`}
       />
       <List.Item.Detail.Metadata.Label title="Renews In" text={formatResetTime(u.subscription.renewsAt)} />
 
       <List.Item.Detail.Metadata.Separator />
 
       {/* Free Tool Calls Section */}
-      <List.Item.Detail.Metadata.Label title="Free Tool Calls" text="" />
-      <List.Item.Detail.Metadata.Label title="Used" text={`${u.freeToolCalls.requests} / ${u.freeToolCalls.limit}`} />
       <List.Item.Detail.Metadata.Label
-        title="Remaining"
-        text={formatQuotaText(u.freeToolCalls.requests, u.freeToolCalls.limit)}
+        title="Free Tool Calls"
+        text={`${generateAsciiBar(toolPct)} ${formatQuotaText(u.freeToolCalls.requests, u.freeToolCalls.limit)}`}
       />
       <List.Item.Detail.Metadata.Label title="Renews In" text={formatResetTime(u.freeToolCalls.renewsAt)} />
 
       <List.Item.Detail.Metadata.Separator />
 
       {/* Search Section */}
-      <List.Item.Detail.Metadata.Label title="Search (Hourly)" text="" />
-      <List.Item.Detail.Metadata.Label title="Used" text={`${u.search.hourly.requests} / ${u.search.hourly.limit}`} />
       <List.Item.Detail.Metadata.Label
-        title="Remaining"
-        text={formatQuotaText(u.search.hourly.requests, u.search.hourly.limit)}
+        title="Search (Hourly)"
+        text={`${generateAsciiBar(searchPct)} ${formatQuotaText(u.search.hourly.requests, u.search.hourly.limit)}`}
       />
       <List.Item.Detail.Metadata.Label title="Renews In" text={formatResetTime(u.search.hourly.renewsAt)} />
     </List.Item.Detail.Metadata>

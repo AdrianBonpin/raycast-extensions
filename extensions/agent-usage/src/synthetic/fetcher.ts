@@ -4,12 +4,13 @@ import type { UsageState } from "../agents/types";
 import { SyntheticUsage, SyntheticError } from "./types";
 import { resolveSyntheticToken } from "./auth";
 import { httpFetch } from "../agents/http";
+import { loadAccounts } from "../accounts/storage";
+import type { AccountUsageState } from "../accounts/types";
+import { readOpencodeAuthToken } from "../agents/opencode-auth";
 
 const SYNTHETIC_QUOTAS_API = "https://api.synthetic.new/v2/quotas";
 
-interface AgentUsagePrefs extends Preferences.AgentUsage {
-  syntheticApiToken?: string;
-}
+type AgentUsagePrefs = Preferences.AgentUsage;
 
 interface QuotaBucketResponse {
   limit?: number;
@@ -86,7 +87,7 @@ function parseSyntheticResponse(data: unknown): { usage: SyntheticUsage | null; 
   }
 }
 
-async function fetchSyntheticUsage(
+export async function fetchSyntheticUsage(
   token: string,
 ): Promise<{ usage: SyntheticUsage | null; error: SyntheticError | null }> {
   const { data, error } = await httpFetch({
@@ -158,4 +159,126 @@ export function useSyntheticUsage(enabled = true): UsageState<SyntheticUsage, Sy
     error: enabled ? error : null,
     revalidate,
   };
+}
+
+/**
+ * Returns one UsageState per named Synthetic account stored in LocalStorage.
+ * Falls back to the preference/OpenCode token if no accounts are stored.
+ *
+ * Each entry in the returned array corresponds to one account.
+ * The array is stable in order (matches LocalStorage order).
+ */
+export function useSyntheticAccounts(enabled = true): AccountUsageState<SyntheticUsage, SyntheticError>[] {
+  const [accountStates, setAccountStates] = useState<AccountUsageState<SyntheticUsage, SyntheticError>[]>([]);
+  const requestIdRef = useRef(0);
+
+  const fetchAll = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+
+    const prefs = getPreferenceValues<AgentUsagePrefs>();
+    const manualAccounts = await loadAccounts("synthetic");
+
+    // Get tokens from different sources
+    const preferenceToken = (prefs.syntheticApiToken as string | undefined)?.trim() || "";
+    const opencodeToken = readOpencodeAuthToken("synthetic");
+
+    // Build list of all accounts: manual + auto-detected (if not duplicate)
+    const accounts = [...manualAccounts];
+
+    // Add preference token as "Manual" if different from manual accounts
+    if (preferenceToken && !accounts.some((a) => a.token === preferenceToken)) {
+      accounts.push({
+        id: `pref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Manual",
+        token: preferenceToken,
+      });
+    }
+
+    // Add OpenCode token as "Auto-detected" if different from existing
+    if (opencodeToken && !accounts.some((a) => a.token === opencodeToken)) {
+      accounts.push({
+        id: `auto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Auto-detected",
+        token: opencodeToken,
+      });
+    }
+
+    // Fallback: if no accounts at all, show not configured
+    if (accounts.length === 0) {
+      setAccountStates([
+        {
+          accountId: "none",
+          label: "Default",
+          token: "",
+          isLoading: false,
+          usage: null,
+          error: {
+            type: "not_configured",
+            message: "Synthetic token not found. Login via OpenCode (synthetic) or add an account via Manage Accounts.",
+          },
+          revalidate: async () => {
+            await fetchAll();
+          },
+        },
+      ]);
+      return;
+    }
+
+    // Kick off all fetches in parallel
+    const results = await Promise.all(
+      accounts.map(async (account) => {
+        const result = await fetchSyntheticUsage(account.token);
+        return { account, result };
+      }),
+    );
+
+    if (requestId !== requestIdRef.current) return;
+
+    setAccountStates(
+      results.map(({ account, result }) => ({
+        accountId: account.id,
+        label: account.label,
+        token: account.token,
+        isLoading: false,
+        usage: result.usage,
+        error: result.error,
+        revalidate: async () => {
+          await fetchAll();
+        },
+      })),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      requestIdRef.current += 1;
+      setAccountStates([]);
+      return;
+    }
+    void fetchAll();
+  }, [enabled, fetchAll]);
+
+  // Set initial loading state only if no data exists
+  useEffect(() => {
+    if (!enabled) return;
+    setAccountStates((prev) =>
+      prev.length === 0 || prev.some((s) => s.accountId === "none")
+        ? [
+            {
+              accountId: "loading",
+              label: "Loading…",
+              token: "",
+              isLoading: true,
+              usage: null,
+              error: null,
+              revalidate: async () => {
+                await fetchAll();
+              },
+            },
+          ]
+        : prev,
+    );
+  }, [enabled, fetchAll]);
+
+  return accountStates;
 }

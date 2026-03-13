@@ -1,10 +1,11 @@
-// src/kimi/fetcher.ts
 import { useState, useEffect, useCallback, useRef } from "react";
 import { getPreferenceValues } from "@raycast/api";
 import type { UsageState } from "../agents/types";
 import { KimiUsage, KimiError } from "./types";
 import { httpFetch } from "../agents/http";
 import { readOpencodeAuthToken } from "../agents/opencode-auth";
+import { loadAccounts } from "../accounts/storage";
+import type { AccountUsageState } from "../accounts/types";
 
 const KIMI_USAGE_API = "https://api.kimi.com/coding/v1/usages";
 
@@ -97,6 +98,17 @@ async function fetchKimiUsage(token: string): Promise<{ usage: KimiUsage | null;
   return parseKimiApiResponse(data);
 }
 
+function resolveKimiTokens(prefs: AgentUsagePrefs): string[] {
+  const candidates: string[] = [];
+
+  // Slot 1: manual preference → OpenCode auto-detect
+  const pref1 = (prefs.kimiAuthToken as string | undefined)?.trim() || "";
+  const slot1 = pref1 || readOpencodeAuthToken("kimi-for-coding") || "";
+  if (slot1) candidates.push(slot1);
+
+  return candidates;
+}
+
 // --- Dual-source auth hook ---
 
 export function useKimiUsage(enabled = true): UsageState<KimiUsage, KimiError> {
@@ -110,11 +122,9 @@ export function useKimiUsage(enabled = true): UsageState<KimiUsage, KimiError> {
     const requestId = ++requestIdRef.current;
 
     const prefs = getPreferenceValues<AgentUsagePrefs>();
+    const tokens = resolveKimiTokens(prefs);
 
-    // Dual-source: opencode auth.json first, then Raycast preference
-    const token = readOpencodeAuthToken("kimi-for-coding") || (prefs.kimiAuthToken as string | undefined)?.trim() || "";
-
-    if (!token) {
+    if (tokens.length === 0) {
       setUsage(null);
       setError({
         type: "not_configured",
@@ -128,11 +138,22 @@ export function useKimiUsage(enabled = true): UsageState<KimiUsage, KimiError> {
     setIsLoading(true);
     setError(null);
 
-    const result = await fetchKimiUsage(token);
-    if (requestId !== requestIdRef.current) return;
+    let lastError: KimiError | null = null;
+    let successUsage: KimiUsage | null = null;
 
-    setUsage(result.usage);
-    setError(result.error);
+    for (const token of tokens) {
+      const result = await fetchKimiUsage(token);
+      if (requestId !== requestIdRef.current) return;
+      if (result.usage) {
+        successUsage = result.usage;
+        lastError = null;
+        break;
+      }
+      lastError = result.error;
+    }
+
+    setUsage(successUsage);
+    setError(lastError);
     setIsLoading(false);
     setHasInitialFetch(true);
   }, []);
@@ -160,4 +181,131 @@ export function useKimiUsage(enabled = true): UsageState<KimiUsage, KimiError> {
     error: enabled ? error : null,
     revalidate,
   };
+}
+
+/**
+ * Returns one UsageState per named Kimi account stored in LocalStorage.
+ * Falls back to the preference/OpenCode token if no accounts are stored.
+ *
+ * Each entry in the returned array corresponds to one account.
+ * The array is stable in order (matches LocalStorage order).
+ */
+export function useKimiAccounts(enabled = true): AccountUsageState<KimiUsage, KimiError>[] {
+  // We store per-account state in parallel arrays indexed by accountId.
+  // Because hooks can't be called in loops, we fetch all accounts up front
+  // and manage state as a single Record keyed by accountId.
+
+  const [accountStates, setAccountStates] = useState<AccountUsageState<KimiUsage, KimiError>[]>([]);
+  const requestIdRef = useRef(0);
+
+  const fetchAll = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+
+    const prefs = getPreferenceValues<AgentUsagePrefs>();
+    const manualAccounts = await loadAccounts("kimi");
+
+    // Get auto-detected token from OpenCode
+    const autoToken = readOpencodeAuthToken("kimi-for-coding");
+    const prefToken = (prefs.kimiAuthToken as string | undefined)?.trim() || "";
+
+    // Build list of all accounts: manual + auto-detected (if not duplicate)
+    const accounts = [...manualAccounts];
+
+    // Add preference token as "Manual" if different from manual accounts
+    if (prefToken && !accounts.some((a) => a.token === prefToken)) {
+      accounts.push({
+        id: `pref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Manual",
+        token: prefToken,
+      });
+    }
+
+    // Add auto-detected token as "Auto-detected" if different from existing
+    if (autoToken && !accounts.some((a) => a.token === autoToken)) {
+      accounts.push({
+        id: `auto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Auto-detected",
+        token: autoToken,
+      });
+    }
+
+    // Fallback: if no accounts at all, show not configured
+    if (accounts.length === 0) {
+      setAccountStates([
+        {
+          accountId: "none",
+          label: "Default",
+          token: "",
+          isLoading: false,
+          usage: null,
+          error: {
+            type: "not_configured",
+            message:
+              "Kimi token not found. Login via OpenCode (kimi-for-coding) or add an account via Manage Accounts.",
+          },
+          revalidate: async () => {
+            await fetchAll();
+          },
+        },
+      ]);
+      return;
+    }
+
+    // Kick off all fetches in parallel
+    const results = await Promise.all(
+      accounts.map(async (account) => {
+        const result = await fetchKimiUsage(account.token);
+        return { account, result };
+      }),
+    );
+
+    if (requestId !== requestIdRef.current) return;
+
+    setAccountStates(
+      results.map(({ account, result }) => ({
+        accountId: account.id,
+        label: account.label,
+        token: account.token,
+        isLoading: false,
+        usage: result.usage,
+        error: result.error,
+        revalidate: async () => {
+          await fetchAll();
+        },
+      })),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      requestIdRef.current += 1;
+      setAccountStates([]);
+      return;
+    }
+    void fetchAll();
+  }, [enabled, fetchAll]);
+
+  // Set initial loading state only if no data exists
+  useEffect(() => {
+    if (!enabled) return;
+    setAccountStates((prev) =>
+      prev.length === 0 || prev.some((s) => s.accountId === "none")
+        ? [
+            {
+              accountId: "loading",
+              label: "Loading…",
+              token: "",
+              isLoading: true,
+              usage: null,
+              error: null,
+              revalidate: async () => {
+                await fetchAll();
+              },
+            },
+          ]
+        : prev,
+    );
+  }, [enabled, fetchAll]);
+
+  return accountStates;
 }

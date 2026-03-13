@@ -2,7 +2,9 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-const OPENCODE_AUTH_FILE = path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
+function getOpencodeAuthFilePath(): string {
+  return process.env.TEST_OPENCODE_AUTH_PATH || path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
+}
 
 interface OpencodeAuthEntry {
   key?: string;
@@ -24,8 +26,9 @@ type OpencodeAuthFile = Record<string, OpencodeAuthEntry>;
  */
 export function readOpencodeAuthToken(providerKey: string): string | null {
   try {
-    if (!fs.existsSync(OPENCODE_AUTH_FILE)) return null;
-    const raw = fs.readFileSync(OPENCODE_AUTH_FILE, "utf-8");
+    const authFile = getOpencodeAuthFilePath();
+    if (!fs.existsSync(authFile)) return null;
+    const raw = fs.readFileSync(authFile, "utf-8");
     const parsed = JSON.parse(raw) as OpencodeAuthFile;
     const entry = parsed[providerKey];
     if (!entry) return null;

@@ -1,10 +1,44 @@
 # Agent Usage Changelog
 
-## [Synthetic Provider and Kimi Fix] - {PR_MERGE_DATE}
+## [Synthetic Provider and OpenCode Integration] - {PR_MERGE_DATE}
 
-- Add Synthetic (synthetic.new) provider — monitor subscription quota, search hourly quota, and free tool calls with pie icon and renewal dates
-- Fix Kimi provider — broken since API moved from `POST /apiv2/.../GetUsages` to `GET https://api.kimi.com/coding/v1/usages`; updated response parser for new flat shape; reorganized UI with Rate Limit Details and Weekly Usage sections
-- Auto-detect credentials from OpenCode (`~/.local/share/opencode/auth.json`) for Kimi, Synthetic, and z.ai — Raycast preference remains as fallback
+### New Features
+
+- **Multi-Account Support** — Add 2nd API key slot for Kimi and z.ai providers (fallback to secondary key if primary fails)
+- Add Synthetic (synthetic.new) provider — monitor subscription quota, search hourly quota, and free tool calls
+- Auto-detect Kimi, Synthetic, and z.ai credentials from OpenCode (`~/.local/share/opencode/auth.json`)
+- **Named Multi-Account Support** — All API key providers (Codex, Kimi, Synthetic, z.ai) now support unlimited named accounts ("Work", "Personal", etc.) managed via a "Manage Accounts" screen accessible from the action panel (Cmd+M). Each account appears as its own row in the list.
+- **Auto-detected accounts** — OpenCode, environment variable, and local auth file tokens now appear as separate "Auto-detected" accounts alongside manually added accounts
+- **Quick API Key Copy** — Copy API key to clipboard with `⌘⇧C` from the provider list or Manage Accounts screen
+
+### Improvements
+
+- **Kimi Accessory Normalization** — List view now shows `72%` instead of `72% remaining` to match other providers
+- Move Antigravity provider below Gemini in default agent order
+- Update Kimi API endpoint to new flat shape (`GET /coding/v1/usages`)
+- Unify detail field names and progress bar style across all agents
+
+## [Progress Bars & Zero-Config Auth] - 2026-03-13
+
+### New Features
+
+- Add ASCII progress bar visualization for all agent usage details
+- Auto-detect Droid auth token from `~/.factory/auth.*` (zero config)
+- Auto-detect Codex auth token from `~/.codex/auth.json` (zero config)
+- Auto-detect z.ai API key from shell environment variables (`ZAI_API_KEY` / `GLM_API_KEY`)
+- Auto-refresh usage data on menu bar click
+
+### Improvements
+
+- Unify detail field names and progress bar style across all agents
+- Simplify Amp detail view (remove email and nickname)
+- Simplify Gemini detail view (remove email and tier fields)
+- Shorten Amp bonus duration format to "d" suffix
+
+### Bug Fixes
+
+- Fix z.ai env token lookup to be async and robust
+- Harden Droid and Codex auth refresh and hook state
 
 ## [Add Claude Usage Provider] - 2026-03-09
 
